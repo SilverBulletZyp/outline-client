@@ -12,17 +12,50 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+// Must come first!
+#include <winsock2.h>
+
 #include <fwpmtypes.h>
 #include <fwpmu.h>
+#include <iphlpapi.h>
+//#include <stdlib.h>
 #include <iostream>
 
+#pragma comment(lib, "iphlpapi.lib")
 #pragma comment(lib, "fwpuclnt.lib")
 
 using namespace ::std;
 
-PCWSTR providerName = L"Outline";
+PCWSTR TAP_DEVICE_NAME = L"outline-tap0";
+ULONG GET_ADAPTERS_ADDRESSES_BUFFER_SIZE = 16384;
 
-int main(int argc, char** argv) {
+PCWSTR FILTER_PROVIDER_NAME = L"Outline";
+
+int main(int argc, char **argv) {
+  // Lookup the interface index of outline-tap0.
+  PIP_ADAPTER_ADDRESSES adaptersAddresses =
+      (IP_ADAPTER_ADDRESSES *)malloc(GET_ADAPTERS_ADDRESSES_BUFFER_SIZE);
+  DWORD result = GetAdaptersAddresses(AF_INET, 0, NULL, adaptersAddresses,
+                                      &GET_ADAPTERS_ADDRESSES_BUFFER_SIZE);
+  if (result != NO_ERROR) {
+    cerr << "could not fetch network device list: " << result << endl;
+    return 1;
+  }
+
+  UINT32 interfaceIndex;
+  PIP_ADAPTER_ADDRESSES adapterAddress = adaptersAddresses;
+  while (adapterAddress && wcscmp(TAP_DEVICE_NAME, adapterAddress->FriendlyName) != 0) {
+    adapterAddress = adapterAddress->Next;
+  }
+
+  if (!adapterAddress) {
+    wcerr << "could not find " << TAP_DEVICE_NAME << endl;
+    return 1;
+  }
+
+  interfaceIndex = adapterAddress->IfIndex;
+  wcout << "found " << TAP_DEVICE_NAME << " at index " << interfaceIndex << endl;
+
   // Connect to the filtering engine. By using a dynamic session, all of our changes are
   // *non-destructive* and will vanish on exit/crash/whatever.
   FWPM_SESSION0 session;
@@ -30,17 +63,23 @@ int main(int argc, char** argv) {
   session.flags = FWPM_SESSION_FLAG_DYNAMIC;
 
   HANDLE engine = 0;
-  DWORD result = FwpmEngineOpen0(NULL, RPC_C_AUTHN_DEFAULT, NULL, &session, &engine);
+  result = FwpmEngineOpen0(NULL, RPC_C_AUTHN_DEFAULT, NULL, &session, &engine);
   if (result != ERROR_SUCCESS) {
     cerr << "could not connect to to filtering engine: " << result << endl;
     return 1;
   }
   cout << "connected to filtering engine" << endl;
 
-  // Create our filters. We create two filters, each with multiple conditions. The first filter
-  // blocks all UDP traffic on port 53 while the second allows such traffic *on the TAP device*.
-  // This approach is the same as that used in the SDK documentation:
+  // Create our filters.
+  //
+  // We create two filters, each with multiple conditions:
+  //  - The first filter blocks all UDP traffic on port 53.
+  //  - The second "extends" the first filter to allow such traffic *on the TAP device*.
+  //
+  // This approach of "layering" conditions is the same as that used in the SDK documentation:
   //   https://docs.microsoft.com/en-us/windows/desktop/fwp/reserving-ports
+  //
+  // Note that we only add IPv4 filters because OutlineService blocks all IPv6 traffic.
   FWPM_FILTER_CONDITION0 conditions[3];
 
   conditions[0].fieldKey = FWPM_CONDITION_IP_PROTOCOL;
@@ -53,15 +92,14 @@ int main(int argc, char** argv) {
   conditions[1].conditionValue.type = FWP_UINT16;
   conditions[1].conditionValue.uint16 = 53;
 
-  // TODO: lookup interface index of outline-tap0.
   conditions[2].fieldKey = FWPM_CONDITION_LOCAL_INTERFACE_INDEX;
   conditions[2].matchType = FWP_MATCH_EQUAL;
   conditions[2].conditionValue.type = FWP_UINT32;
-  conditions[2].conditionValue.uint32 = 3;
+  conditions[2].conditionValue.uint32 = interfaceIndex;
 
   FWPM_FILTER0 filter;
   memset(&filter, 0, sizeof(filter));
-  filter.displayData.name = (PWSTR)providerName;
+  filter.displayData.name = (PWSTR)FILTER_PROVIDER_NAME;
   filter.filterCondition = conditions;
   filter.layerKey = FWPM_LAYER_ALE_AUTH_CONNECT_V4;
 
@@ -72,7 +110,7 @@ int main(int argc, char** argv) {
   filter.action.type = FWP_ACTION_BLOCK;
   result = FwpmFilterAdd0(engine, &filter, NULL, &filterId);
   if (result != ERROR_SUCCESS) {
-    cerr << "could not connect block port 53: " << result << endl;
+    cerr << "could not block port 53: " << result << endl;
     return 1;
   }
   cout << "port 53 blocked with filter " << filterId << endl;
@@ -82,12 +120,13 @@ int main(int argc, char** argv) {
   filter.action.type = FWP_ACTION_PERMIT;
   result = FwpmFilterAdd0(engine, &filter, NULL, &filterId);
   if (result != ERROR_SUCCESS) {
-    cerr << "could not connect whitelist port 53 on outline-tap0: " << result << endl;
+    wcerr << "could not whitelist port 53 on " << TAP_DEVICE_NAME << ": " << result << endl;
     return 1;
   }
-  cout << "port 53 whitelisted on outline-tap0 with filter " << filterId << endl;
+  wcout << "port 53 whitelisted on " << TAP_DEVICE_NAME << " with filter " << filterId << endl;
 
-  // TODO: blanket IPv6 block?
+  // OutlineService looks for this.
+  cout << "all done" << endl;
 
   // Wait forever.
   system("pause");

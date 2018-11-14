@@ -98,7 +98,7 @@ namespace OutlineService
         private IPAddress gatewayIp;
         private string gatewayInterfaceName;
 
-        Process dnsLeakProtector = new Process();
+        Process disableSmartDns = new Process();
 
         // Do as little as possible here because any error thrown will cause "net start" to fail
         // without anything being added to the application log.
@@ -302,42 +302,27 @@ namespace OutlineService
                 throw new Exception("do not know router or proxy IPs");
             }
 
-            // Set the lowest possible device metric for the TAP device, to ensure
-            // the system favours the (non-filtered) DNS server(s) associated with
-            // the TAP device:
-            //   https://github.com/Jigsaw-Code/outline-client/issues/191
+            // Disable "Smart Multi-Homed Name Resolution", to ensure the system uses only the
+            // (non-filtered) DNS server(s) associated with the TAP device.
             //
-            // Note:
-            //  - This is *not* necessary to ensure that traffic is routed via the
-            //    proxy (though it does make the output of "route print" easier to
-            //    grok).
-            //  - We could, on disconnection, reset the device metric to auto but
-            //    since the TAP device is essentially unused unless the VPN
-            //    connection is active, there doesn't seem to be a big reason to do
-            //    so. To do it manually:
-            //      netsh interface ip set interface outline-tap0 metric=auto
-            //  - To show the metrics of all interfaces:
-            //      netsh interface ip show interface
+            // Notes:
+            //  - To show the current firewall rules:
+            //      netsh wfp show filters
+            //  - This website is a great way to quickly verify there are no DNS leaks:
+            //      https://ipleak.net/
+            //  - Because .Net provides *no way* to associate the new process with this one, the
+            //    new process will continue to run even if this service is interrupted or crashes.
+            //    Fortunately, since the changes it makes are *not* persistent, the system can, in
+            //    the worst case, be fixed by rebooting.
             try
             {
-                RunCommand(CMD_NETSH, string.Format("interface ip set interface {0} metric=0", TAP_DEVICE_NAME));
+                disableSmartDns.StartInfo.FileName = "C:\\src\\outline-client\\tools\\nosmartdns\\Debug\\nosmartdns.exe";
+                disableSmartDns.Start();
+                disableSmartDns.WaitForExit(1000);
             }
             catch (Exception e)
             {
-                throw new Exception($"could not set low interface metric: {e.Message}");
-            }
-
-            // Enable DNS leak protection.
-            try
-            {
-                dnsLeakProtector.StartInfo.FileName = "C:\\src\\outline-client\\tools\\nosmartdns\\Debug\\nosmartdns.exe";
-                dnsLeakProtector.Start();
-
-                // TODO: fail if the process dies? there is no channel from here -> client, however
-            }
-            catch (Exception e)
-            {
-                throw new Exception($"could not enable DNS leak protection: {e.Message}");
+                throw new Exception($"could not disable Smart DNS: {e.Message}");
             }
 
             // Proxy routing: the proxy's IP address needs to bypass the router. Save the system gateway
@@ -414,7 +399,7 @@ namespace OutlineService
             // Disable DNS leak protection.
             try
             {
-                dnsLeakProtector.Kill();
+                disableSmartDns.Kill();
             }
             catch (Exception e)
             {
