@@ -393,7 +393,9 @@ namespace OutlineService
         //    the worst case, be fixed by rebooting.
         private void StartSmartDnsBlock()
         {
-            smartDnsBlock.StartInfo.FileName = "smartdnsblock.exe";
+            // smartdnsblock.exe must be a sibling of OutlineService.exe.
+            smartDnsBlock.StartInfo.FileName = new DirectoryInfo(Process.GetCurrentProcess().MainModule.FileName).Parent.FullName +
+                Path.DirectorySeparatorChar + "smartdnsblock.exe";
 
             smartDnsBlock.StartInfo.UseShellExecute = false;
             smartDnsBlock.StartInfo.RedirectStandardError = true;
@@ -436,7 +438,7 @@ namespace OutlineService
             }
             catch (Exception e)
             {
-                throw new Exception($"could not launch smartdnsblock: {e.Message}");
+                throw new Exception($"could not launch smartdnsblock at {smartDnsBlock.StartInfo.FileName}: { e.Message}");
             }
 
             // This does *not* throw if the process is still running after 1000ms.
