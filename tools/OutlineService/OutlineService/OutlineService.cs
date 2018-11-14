@@ -27,6 +27,7 @@ using System.Net.Sockets;
 using System.Net;
 using System.Runtime.Serialization;
 using System.Security.Principal;
+using System.Collections;
 
 /*
  * Windows Service, part of the Outline Windows client, to configure routing.
@@ -98,7 +99,7 @@ namespace OutlineService
         private IPAddress gatewayIp;
         private string gatewayInterfaceName;
 
-        Process disableSmartDns = new Process();
+        Process smartDnsBlock = new Process();
 
         // Do as little as possible here because any error thrown will cause "net start" to fail
         // without anything being added to the application log.
@@ -302,28 +303,7 @@ namespace OutlineService
                 throw new Exception("do not know router or proxy IPs");
             }
 
-            // Disable "Smart Multi-Homed Name Resolution", to ensure the system uses only the
-            // (non-filtered) DNS server(s) associated with the TAP device.
-            //
-            // Notes:
-            //  - To show the current firewall rules:
-            //      netsh wfp show filters
-            //  - This website is a great way to quickly verify there are no DNS leaks:
-            //      https://ipleak.net/
-            //  - Because .Net provides *no way* to associate the new process with this one, the
-            //    new process will continue to run even if this service is interrupted or crashes.
-            //    Fortunately, since the changes it makes are *not* persistent, the system can, in
-            //    the worst case, be fixed by rebooting.
-            try
-            {
-                disableSmartDns.StartInfo.FileName = "C:\\src\\outline-client\\tools\\nosmartdns\\Debug\\nosmartdns.exe";
-                disableSmartDns.Start();
-                disableSmartDns.WaitForExit(1000);
-            }
-            catch (Exception e)
-            {
-                throw new Exception($"could not disable Smart DNS: {e.Message}");
-            }
+            StartSmartDnsBlock();
 
             // Proxy routing: the proxy's IP address needs to bypass the router. Save the system gateway
             // before we add the route. This is necessary for updating the proxy route when the network
@@ -396,17 +376,89 @@ namespace OutlineService
             RemoveReservedSubnetBypass(proxyInterfaceName);
             StartRoutingIpv6();
 
-            // Disable DNS leak protection.
+            StopSmartDnsBlock();
+        }
+
+        // Disable "Smart Multi-Homed Name Resolution", to ensure the system uses only the
+        // (non-filtered) DNS server(s) associated with the TAP device.
+        //
+        // Notes:
+        //  - To show the current firewall rules:
+        //      netsh wfp show filters
+        //  - This website is a great way to quickly verify there are no DNS leaks:
+        //      https://ipleak.net/
+        //  - Because .Net provides *no way* to associate the new process with this one, the
+        //    new process will continue to run even if this service is interrupted or crashes.
+        //    Fortunately, since the changes it makes are *not* persistent, the system can, in
+        //    the worst case, be fixed by rebooting.
+        private void StartSmartDnsBlock()
+        {
+            smartDnsBlock.StartInfo.FileName = "smartdnsblock.exe";
+
+            smartDnsBlock.StartInfo.UseShellExecute = false;
+            smartDnsBlock.StartInfo.RedirectStandardError = true;
+            smartDnsBlock.StartInfo.RedirectStandardOutput = true;
+
+            ArrayList stdout = new ArrayList();
+            ArrayList stderr = new ArrayList();
+            smartDnsBlock.OutputDataReceived += (object sender, DataReceivedEventArgs e) =>
+                {
+                    if (!String.IsNullOrEmpty(e.Data))
+                    {
+                        stdout.Add(e.Data);
+                    }
+                };
+            smartDnsBlock.ErrorDataReceived += (object sender, DataReceivedEventArgs e) =>
+                        {
+                            if (!String.IsNullOrEmpty(e.Data))
+                            {
+                                stderr.Add(e.Data);
+                            }
+                        };
+
             try
             {
-                disableSmartDns.Kill();
+                // Must cancel any previous reads.
+                try
+                {
+                    smartDnsBlock.CancelOutputRead();
+                }
+                catch { }
+                try
+                {
+                    smartDnsBlock.CancelErrorRead();
+                }
+                catch { }
+
+                smartDnsBlock.Start();
+                smartDnsBlock.BeginOutputReadLine();
+                smartDnsBlock.BeginErrorReadLine();
             }
             catch (Exception e)
             {
-                eventLog.WriteEntry($"could not lift DNS leak protection: {e.Message}",
-                    EventLogEntryType.Warning);
+                throw new Exception($"could not launch smartdnsblock: {e.Message}");
             }
 
+            // This does *not* throw if the process is still running after 1000ms.
+            smartDnsBlock.WaitForExit(1000);
+            if (smartDnsBlock.HasExited)
+            {
+                throw new Exception($"smartdnsblock failed " +
+                    $"(stdout: {String.Join(Environment.NewLine, stdout.ToArray())}, " +
+                    $"(stderr: {String.Join(Environment.NewLine, stderr.ToArray())})");
+            }
+        }
+
+        private void StopSmartDnsBlock()
+        {
+            try
+            {
+                smartDnsBlock.Kill();
+            }
+            catch (Exception e)
+            {
+                throw new Exception($"could not kill smartdnsblock: {e.Message}");
+            }
         }
 
         private void AddProxyRoute(string proxyIp, string systemGatewayIp, string interfaceName)

@@ -15,11 +15,12 @@
 // Must come first!
 #include <winsock2.h>
 
+#include <iostream>
+
+#include <iphlpapi.h>
+
 #include <fwpmtypes.h>
 #include <fwpmu.h>
-#include <iphlpapi.h>
-//#include <stdlib.h>
-#include <iostream>
 
 #pragma comment(lib, "iphlpapi.lib")
 #pragma comment(lib, "fwpuclnt.lib")
@@ -124,9 +125,6 @@ int main(int argc, char **argv) {
     return 1;
   }
   wcout << "port 53 whitelisted on " << TAP_DEVICE_NAME << " with filter " << filterId << endl;
-
-  // OutlineService looks for this.
-  cout << "all done" << endl;
 
   // Wait forever.
   system("pause");
