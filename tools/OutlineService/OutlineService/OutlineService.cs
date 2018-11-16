@@ -13,21 +13,21 @@
 // limitations under the License.
 
 using System;
+using System.Collections;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.IO.Pipes;
-using System.Net.NetworkInformation;
-using System.ServiceProcess;
-using System.Security.AccessControl;
-using System.Text;
-using System.Collections.Generic;
-using Newtonsoft.Json;
 using System.Linq;
-using System.Net.Sockets;
 using System.Net;
+using System.Net.NetworkInformation;
+using System.Net.Sockets;
 using System.Runtime.Serialization;
+using System.Security.AccessControl;
 using System.Security.Principal;
-using System.Collections;
+using System.ServiceProcess;
+using System.Text;
+using Newtonsoft.Json;
 
 /*
  * Windows Service, part of the Outline Windows client, to configure routing.
@@ -58,7 +58,8 @@ namespace OutlineService
     {
         private const string EVENT_LOG_SOURCE = "OutlineService";
         private const string EVENT_LOG_NAME = "Application";
-        private const string PIPE_NAME = "OutlineServicePipe"; // Must be kept in sync with electron.
+        // Must be kept in sync with the Electron code.
+        private const string PIPE_NAME = "OutlineServicePipe";
         private const string TAP_DEVICE_NAME = "outline-tap0";
 
         private const string ACTION_CONFIGURE_ROUTING = "configureRouting";
